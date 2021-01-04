@@ -1,0 +1,181 @@
+---
+title: 'Strategies for Analyzing a 12-Gigabyte Data Set: Airline Flight Delays'
+output: 
+  pdf_document:
+    latex_engine: xelatex
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, highlight = T, eval = F)
+```
+
+## Giới thiệu
+- Tham khảo từ sách `Data Science in R - A Case Studies Approach to Computational Reasoning and Problem Solving, Deborah Nolan, Duncan Temple Lang, 2015`
+
+## Tập dữ liệu đầu vào
+Dữ liệu đầu vào được lấy từ trang web <http://stat-computing.org/dataexpo/2009/the-data.html>.
+Trang web có 21 file CSV được nén bằng định dạng bunzip2 (bz2), chứa dữ liệu thu thập được trong 21 năm, từ năm **1987** tới năm **2008**, bao gồm 29 biến dữ liệu. Thông tin của tập dữ liệu được giải thích trong trang web trên, cụ thể như sau:
+
+|STT | Biến                          |  Mô tả |
+|---:|:----------------|:--------------------------------|
+|1   |`Year`              | Năm (1987-2008) |
+|2   |`Month`             | Tháng (1-12) |
+|3   |`DayofMonth`        | Ngày (1-31) |
+|4   |`DayOfWeek`         | Ngày trong tuần: 1(thứ hai) - 7(chủ nhật) |
+|5   |`DepTime`           | Thời gian khởi hành thực tế (theo giờ địa phương, hhmm) |
+|6   |`CRSDepTime`        | Thời gian khởi hành dự kiến (theo giờ địa phương, hhmm) |
+|7   |`ArrTime`           | Thời gian đến thực tế (theo giờ địa phương, hhmm) |
+|8   |`CRSArrTime`        | Thời gian đến dự kiến (theo giờ địa phương, hhmm) |
+|9   |`UniqueCarrier`     | |
+|10  |`FlightNum`         | Số chuyến bay |
+|11  |`TailNum`           | Số ở đuôi máy bay |
+|12  |`ActualElapsedTime` | Thời gian bay thực tế |
+|13  |`CRSElapsedTime`    | Thời gian bay dự kiến |
+|14  |`AirTime`           | |
+|15  |`ArrDelay`          | Thời gian đến trễ (phút) |
+|16  |`DepDelay`          | Thời gian khởi hành trễ (phút) |
+|17  |`Origin`            | Mã sân bay khởi hành, mã gồm ba chữ cái, được định nghĩa bởi Hiệp hội Vận tải Hàng không Quốc tế (IATA) |
+|18  |`Dest`              | Mã sân bay hạ cánh, mã gồm ba chữ cái, được định nghĩa bởi Hiệp hội Vận tải Hàng không Quốc tế (IATA) |
+|19  |`Distance`          | Khoảng cách bay (dặm) |
+|20  |`TaxiIn`            | |
+|21  |`TaxiOut`           | |
+|22  |`Cancelled`         | Có phải chuyến bay bị hủy: 0(Sai) - 1(Đúng) |
+|23  |`CancellationCode`  | Nguyên do hủy chuyến: A(Carrier) - B(Lý do thời tiết) - C(NAS) - D(Lý do an ninh) |
+|24  |`Diverted`          | Chuyển hướng bay: 0(Sai) - 1(Đúng) |
+|25  |`CarrierDelay`      | (phút) |
+|26  |`WeatherDelay`      | Trễ do thời tiết (phút) |
+|27  |`NASDelay`          | Trễ do Hệ thống Hàng không Quốc gia (NAS) quy định (phút) |
+|28  |`SecurityDelay`     | Trễ do an ninh (phút) |
+|29  |`LateAircraftDelay` | Máy bay đến trễ (phút) |
+
+## Giới thiệu các công nghệ sử dụng
+- UNIX Shell: Một công cụ xử lý mạnh mẽ với cú pháp đơn giản.
+- R: Ngôn ngữ lập trình chuyên cho xử lý và phân tích dữ liệu, cụ thể ta sẽ sử dụng các thư viện như: `ggplot2` cho việc vẽ biểu đồ, `parallel` cho việc tính toán song song, `doSNOW` để sử dụng nhiều lõi (core) của máy tính cho việc tính toán, `bigmemory` để lưu trữ dữ liệu lớn.
+
+## Tiền xử lý dữ liệu:
+- Dữ liệu tải về được lưu trong 21 file được nén bởi định dạng bunzip2, ta sử dụng UNIX Shell - một công cụ đầy mạnh mẽ với cú pháp đơn giản - để giải nén những file dữ liệu.
+```{bash}
+#Shell:
+for year in {1987..2008}
+do
+  bunzip2 $year.csv.bz2
+done
+```
+- Do cấu trúc dữ liệu bigmatrix yêu cầu tất cả giá trị phải cùng một kiểu dữ liệu, do đó ta sẽ ánh xạ những giá trị dạng chữ bằng một con số, cách đơn giản nhất là tận dụng kiểu dữ liệu factor trong R. Ý tưởng của chúng ta sẽ là sử dụng `read.csv()` để đọc và lưu dữ liệu vào một biến, sau đó ánh xạ và ghi đè dữ liệu đó trở lại file CSV.    
+- Tuy nhiên để tối ưu hóa bộ nhớ RAM, mỗi khi ta sử dụng xong biến đó thì ta phải giải phóng biến và gọi trình dọn dẹp bộ nhớ. Nguyên do là khi RAM bị sử dụng quá dung lượng hiện có, dữ liệu sẽ được chuyển sang ổ đĩa và được gọi lại RAM khi cần thiết. Và ta biết rằng tốc độ đọc từ ổ đĩa sẽ chậm hơn so với RAM, việc này sẽ khiến cho việc xử lý cực kỳ chậm chạp khi xử lý những dữ liệu lớn.    
+- Hàm để giải phóng biến là `rm()`, và hàm dọn dẹp bộ nhớ là `gc()` trong R
+```{r}
+#R:
+for(year in 1987:2008) {
+  # stringAsFactors = TRUE sẽ chuyển tập dữ liệu dạng chuỗi sang kiểu factor
+  x <- read.csv(paste(year, ".csv", sep = ""), stringAsFactors = TRUE)
+  # Ta có năm biến dữ liệu trên được lưu ở dạng chuỗi
+  x$UniqueCarrier <- unclass(x$UniqueCarrier)
+  x$TailNum <- unclass(x$TailNum)
+  x$Origin <- unclass(x$Origin)
+  x$Dest <- unclass(x$Dest)
+  x$CancellationCode <- unclass(x$CancellationCode)
+  # Sau khi xử lý xong, ta ghi đè vào file CSV cũ
+  write.csv(x, paste(year, ".csv", sep = ""), row.names = FALSE)
+  # Ta giải phóng biến x
+  rm(x)
+  # Và gọi trình dọn dẹp bộ nhớ
+  gc()
+}
+```
+- Sau khi xử lý những cột dữ liệu dạng chữ xong ta sẽ sử dụng UNIX Shell để gộp 21 file dữ liệu vào chung 1 file tên là airline.csv
+- Đầu tiên ta copy và paste file 1987.csv, đồng thời đổi tên thành airline.csv
+```{bash}
+#Shell:
+cp 1987.csv airline.csv
+```
+- Sau đó ta sử dụng hàm `tail` để lấy ra dữ liệu trong file CSV và lưu vào file airline.csv
+```{bash}
+#Shell:
+for year in {1988..2008}
+do
+  tail -n+2 $year.csv >> airline.csv
+done
+```
+- Ta sử dụng `tail -n+2` có ý nghĩa là lấy hết tất cả giá trị trong file CSV, ngoại trừ dòng đầu - dòng lưu tên của các cột. Toán tử >> có ý nghĩa những giá trị được lấy ở hàm `tail` sẽ được lưu vào file airline.csv.
+- Để tiết kiệm dung lượng cho những máy có bộ nhớ hạn chế, ta có thể chạy câu lệnh xóa file mỗi khi chép xong dữ liệu
+```{bash}
+#Shell:
+for year in {1988..2008}
+do
+  tail -n+2 $year.csv >> airline.csv
+  rm -rf $year.csv
+done
+```
+- Ta có thể kiểm tra số chuyến bay thu thập được trong file bằng lệnh `wc` (word count) với tham số `-l` - đếm số dòng (lines) thay vì đếm số từ.
+```{bash}
+#Shell:
+wc -l airline.csv
+```
+File dữ liệu của chúng ta có 123.534.970 dòng
+
+## Read big.matrix
+- Package `bigmemory` cung cấp chức năng để xử lý ma trận với dữ liệu đầu vào lớn hơn bộ nhớ RAM hiện có của máy tính. Nó có nhiều lợi thế hơn khi so sánh với các phương pháp khác. **Đầu tiên** nó cung cấp cấu trúc dữ liệu có thể chứa toàn bộ dữ liệu khổng lồ, giúp ta không phải tải dữ liệu từ các tệp một cách thủ công. **Thứ hai** các cấu trúc dữ liệu được cung cấp bởi `bigmemory` có thể truy cập và thao tác tương tự như `matrix` trong R. **Thứ ba** `bigmemory` có thể hoạt động với những hàm căn bản của R mà không cần hoặc ít điều chỉnh. **Và cuối cùng** nó được thiết kế để hoạt động với môi trường tính toán song song và phân tán.
+- Ta sử dụng cấu trúc dữ liệu `big.matrix` để thực hiện việc đọc dữ liệu máy bay.
+```{r}
+#R:
+library(bigmemory)
+
+x <- read.big.matrix("airline.csv", header = TRUE,
+                backingfile = "airline.bin",
+                descriptorfile = "airline.desc",
+                type = "integer", extraCols = "age")
+```
+- Tùy vào phần cứng máy tính mà việc đọc này có thể mất hơn 30 phút. Tuy nhiên ta có thể sử dụng tệp mô tả `airline.desc` cho những lần khởi động sau mà không cần mất thời gian tạo một `big.matrix` mới. Cú pháp gọi dữ liệu cho những lần sau là:
+```{r}
+y <- attach.big.matrix("airline.desc")
+```
+## Phân tích dữ liệu chuyến bay dựa theo giờ bay
+- Ta đặt câu hỏi rằng: thời gian nào trong ngày là tốt nhất để bay? Thời gian tốt nhất để bay có thể hiểu là thời gian có độ trễ chuyến tối đa là nhỏ nhất trong 90% trường hợp. Ta có thể tăng tỷ lệ lên 99%, 99.9% và 99.99%.
+- Ở đây ta sử dụng phương pháp **Split-Apply-Combine**, bằng cách chia nhỏ (split) ra thành nhiều nhóm nhỏ để tăng tốc độ xử lý.
+- Đầu tiên ta chia thời gian bay thành 24 nhóm nhỏ, mỗi nhóm ứng với một giờ bay. Với cột dữ liệu `CRSDepTime` lưu thời gian khởi hành dự kiến, ví dụ 840 ứng với thời gian khởi hành là 8h40'.
+```{r}
+#R:
+library(foreach)
+
+x <- attach.big.matrix("airline.desc")
+# Lấy phần nguyên của cột CRSDepTime lưu vào biến depHours
+depHours <- floor(x[,"CRSDepTime"]/100)
+depHours[depHours==24] <- 0
+# Chia thời gian bay thành 24 nhóm nhỏ
+hourInds <- split(1:length(depHours), depHours)
+# Biến lưu các tỷ lệ
+myProbs <- c(0.9, 0.99, 0.999, 0.9999)
+```
+- Ta sử dụng thư viện `parallel` để thực hiện tính toán song song, kết hợp với thư viện `doSNOW` sử dụng các lõi của bộ xử lý để tính toán song song. Ta sẽ sử dụng số lõi của máy trừ đi một để phục vụ tính toán song song, và lõi còn lại để tính toán các chi phí khác.
+```{r}
+#R:
+library(parallel)
+library(doSNOW)
+# Lấy số lõi xử lý của máy
+numParallelCores <- max(1, detectCores() - 1, na.rm=TRUE)
+# Khởi tạo quá trình tính toán song song cho các lõi
+cl <- makeCluster(rep("localhost", numParallelCores), type = "SOCK")
+# Đăng lý quá trình tính toán song song cho thư viện foreach
+registerDoSNOW(cl)
+delayQuantiles <- foreach(hour=hourInds, .combine=cbind) %dopar% {
+  require(bigmemory)
+  x <- attach.big.matrix("airline.desc")
+  quantile(x[hour, "DepDelay"], myProbs, na.rm=TRUE)
+}
+# Đổi tên cột
+colnames(delayQuantiles) <- names(hourInds)
+stopCluster(cl)
+```
+- Sau khi tính toán xong ta có thể biểu diễn kết quả bằng một biểu đồ
+```{r}
+#R:
+library(reshape2)
+library(ggplot2)
+
+dq <- melt(delayQuantiles)
+names(dq) <- c("percentile", "hour", "delay")
+qplot(hour, delay, data = dq, color = percentile, geom = "line")
+```
+![](plot.png)
+- Ta có thể thấy thời gian khởi hành có sự chậm trễ lớn nhất vào đầu giờ sáng, và vào những chuyến bay đêm. Và thời gian khởi hành vào khoảng 6h tới 16h sẽ có sự chậm trễ ít hơn.
